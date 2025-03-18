@@ -1,0 +1,1133 @@
+---
+title: "DDMCS"
+author: 'Manna, Zilviano'
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    mathjax: "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-MML-AM_CHTML"
+    latex_engine: xelatex
+    number_sections: yes
+---
+
+
+```{r include=FALSE}
+library(igraph)
+library(visNetwork)
+library(ggplot2)
+library(shiny)
+```
+
+# Funzioni
+
+##  Basic info of the graph
+
+```{r function to get basic info of the graph}
+basic_info <- function(graph){
+  number_of_nodes <- vcount(graph)
+  number_of_links <- ecount(graph)
+  
+  print(paste("Number of nodes: ",number_of_nodes,sep=""))
+  print(paste("Number of links: ",number_of_links,sep=""))
+  
+  max_links_possible <- choose(number_of_nodes,2) 
+  print(paste("Theoretical links upper bound: ",max_links_possible,sep=""))
+  
+  
+  print(paste("Is the graph strongly connected?: ", is_connected(graph),sep=""))
+
+  # Get the largest component
+  #largest_component(graph)
+}
+```
+
+
+## Average degree e densità di un grafo
+```{r funzione per average degree e densità di un grafo}
+caratteristiche_base_grafo <- function(graph,directed){
+  
+  # Densità
+  graph_density <- edge_density(graph)
+  print(paste("Density: ",graph_density,sep=""))  
+    
+
+  print(paste("Is the graph connected?: ", is_connected(graph),sep=""))
+  
+  # Average degree
+  average_degree_c <- mean(degree(graph))
+  print(paste("Average degree <k>: ",average_degree_c,sep=""))  
+ 
+  # Average clustering coefficient
+  #average_clustering_coefficient <- transitivity(graph, type="average")
+  #print(paste("Average clustering coefficient: ",average_clustering_coefficient,sep=""))  
+  
+  # Average path lenght
+  avg_path_length <- mean_distance(graph,directed = directed)
+  print(paste("Average path lenght: ",avg_path_length,sep=""))  
+  
+  # Diameter, that is the largest distance recorded between any pair of nodes.
+  #  is calculated by using a breadth-first search like method.
+  print(paste("Diameter: ",diameter(graph,directed = directed),sep=""))  
+  
+}
+```
+
+
+## Plot an interactive newtwork
+To visualize the graph we choose the *visNetwork* library that allow to create and visualize interactive graphs.
+We have also assigned a color to each category and bigger size to the more connected users.  
+
+```{r Plot an interactive network}
+plot_interactive_network <- function (graph){
+  # Evaluate the degree of the graph
+  degree <- degree(graph)
+  
+  
+  # Converts the graph to a visNetwork compatible format
+  graph_vis <- toVisNetworkData(graph)
+  
+  # Add node names within the nodes themselves
+  graph_vis$nodes$label <- as.character(V(graph)$nome)
+  
+  # Set the size of nodes by degree
+  max_size <- 100
+  min_size <- 10
+  node_sizes <- (degree - min(degree)) / (max(degree) - min(degree)) * (max_size - min_size) + min_size
+  graph_vis$nodes$size <- node_sizes
+  graph_vis$edges$arrows <- 'to'
+  
+  
+  # Plot the interactive graph with visNetwork
+  visNetwork(nodes = graph_vis$nodes, edges = graph_vis$edges) %>%
+    visIgraphLayout(type = "full", randomSeed = 123) %>%
+    visNodes()
+  
+}
+```
+
+
+
+## Get the shortest path between two users
+
+```{r Get the shortest path between two users}
+shortest_path <- function(start_node,end_node,graph){
+  
+  # Get the shortest path between two nodes 
+  shortest_path <- all_shortest_paths(graph, from = start_node, to = end_node)$vpaths
+  shortest_path <- names(shortest_path[[1]])
+  
+  print(paste("Path tra i due utenti: ",toString(shortest_path),sep=""))
+
+  # Is the distance of the two user, if the distance is 1 they are directly connected
+  distance <- distances(graph,v = start_node,to = end_node)[1,1]
+  print(paste("Distanza: ",distance,sep=""))
+  print(paste("Persone che separano i due utenti: ",distance-1,sep=""))
+}
+```
+
+
+
+
+## Plots for degree distributions
+
+```{r function for degree distribution plots}
+degree_distribution_plots2 <- function(graph,type_d){
+  
+  # First plot Log-log Degree Distribution
+  ## Compute the degree of each vertex
+  #degrees <- degree(graph)
+  
+
+  #----------------------------------------------------------------------------------------------------------------------#
+  
+  # Another Degree Distribution
+  ## Calculate the degrees of all nodes
+  node_degree <- degree(graph, mode = type_d)
+  
+  ## Convert degrees to numbers
+  node_degree <- as.numeric(node_degree)
+  
+  ## Find the maximum rank
+  max_degree <- max(node_degree)
+  
+  ## Calculate frequencies for each degree from 0 to max_degree
+  degree_freq <- table(node_degree)
+  all_degrees <- seq(0, max_degree)
+  all_freq <- rep(0, length(all_degrees))
+  all_freq[as.integer(names(degree_freq))] <- degree_freq
+  
+  ## Create a data frame for the degree distribution
+  degree_df <- data.frame(degree = all_degrees, frequency = all_freq)
+  total_freq <- sum(degree_df$frequency)
+  degree_df$percentage <- (degree_df$frequency / total_freq) 
+  
+
+  #----------------------------------------------------------------------------------------------------------------------# 
+  # Calculate CCDF (Cumulative Distribution Function Complement)
+  ccdf <- 1 - cumsum(table(node_degree) / length(node_degree))
+  
+  # Observed Data
+  observed_data <- data.frame(x = names(ccdf), y = ccdf)
+  
+  # Function to calculate the sum of squared errors between observed and predicted data
+  ssr <- function(params) {
+    mu <- params[1]
+    sigma <- params[2]
+    expected_ccdf <- 1 - plogis(as.numeric(names(ccdf)), location = mu, scale = sigma)
+    sum((expected_ccdf - ccdf)^2)
+  }
+
+  # Initialize the starting parameters for optimization
+  start_params <- c(1, 1)
+  
+  # Optimize parameters to minimize the sum of squared errors
+  fit <- optim(start_params, ssr)
+  
+  # Parameters
+  mu <- fit$par[1]
+  sigma <- fit$par[2]
+  
+  print(mu)
+  print(sigma)
+  # Generate CCDF of log-normal distribution
+  expected_ccdf <- 1 - plogis(as.numeric(names(ccdf)), location = mu, scale = sigma)
+  
+  # Predicted data
+  predicted_data <- data.frame(x = as.numeric(names(ccdf)), y = expected_ccdf)
+  
+  # Merge observed and predicted data
+  combined_data <- rbind(observed_data, predicted_data)
+  combined_data$type <- rep(c("Actual Data", "Log-Normal Fit"), each = length(observed_data$x))
+  
+  # Remove non-numeric values from the dataset before applying log()
+  observed_data <- observed_data[!is.na(observed_data$x) & !is.na(observed_data$y),]
+  predicted_data <- predicted_data[!is.na(predicted_data$x) & !is.na(predicted_data$y),]
+  
+  # Plot
+  ggplot(combined_data, aes(x = log(as.numeric(x)), y = log(as.numeric(y)), color = type)) +
+    geom_line() +
+    labs(title = "CCDF with Log-Normal Fitting ",
+         x = "log(Out Degree)",
+         y = "log(CCDF)",
+         color = "Type") +
+    theme_minimal()+ theme(plot.title = element_text(hjust = 0.5))  # Center the title
+}
+
+degree_distribution_plots <- function(graph,type_d){
+  
+  # First plot Log-log Degree Distribution
+  ## Compute the degree of each vertex
+  #degrees <- degree(graph)
+  
+
+  #----------------------------------------------------------------------------------------------------------------------#
+  
+  # Another Degree Distribution
+  ## Calculate the degrees of all nodes
+  node_degree <- degree(graph, mode = type_d)
+  
+  ## Convert degrees to numbers
+  node_degree <- as.numeric(node_degree)
+  
+  ## Find the maximum rank
+  max_degree <- max(node_degree)
+  
+  ## Calculate frequencies for each degree from 0 to max_degree
+  degree_freq <- table(node_degree)
+  all_degrees <- seq(0, max_degree)
+  all_freq <- rep(0, length(all_degrees))
+  all_freq[as.integer(names(degree_freq))] <- degree_freq
+  
+  ## Create a data frame for the degree distribution
+  degree_df <- data.frame(degree = all_degrees, frequency = all_freq)
+  total_freq <- sum(degree_df$frequency)
+  degree_df$percentage <- (degree_df$frequency / total_freq) 
+  
+
+  #----------------------------------------------------------------------------------------------------------------------# 
+  # Calculate CCDF (Cumulative Distribution Function Complement)
+  ccdf <- 1 - cumsum(table(node_degree) / length(node_degree))
+  
+  # Observed Data
+  observed_data <- data.frame(x = names(ccdf), y = ccdf)
+  
+  # Function to calculate the sum of squared errors between observed and predicted data
+  ssr <- function(params) {
+    mu <- params[1]
+    sigma <- params[2]
+    expected_ccdf <- 1 - plogis(as.numeric(names(ccdf)), location = mu, scale = sigma)
+    sum((expected_ccdf - ccdf)^2)
+  }
+
+  # Initialize the starting parameters for optimization
+  start_params <- c(1, 1)
+  
+  # Optimize parameters to minimize the sum of squared errors
+  fit <- optim(start_params, ssr)
+  
+  # Parameters
+  mu <- fit$par[1]
+  sigma <- fit$par[2]
+  
+  print(mu)
+  print(sigma)
+  # Generate CCDF of log-normal distribution
+  expected_ccdf <- 1 - plogis(as.numeric(names(ccdf)), location = mu, scale = sigma)
+  
+  # Predicted data
+  predicted_data <- data.frame(x = as.numeric(names(ccdf)), y = expected_ccdf)
+  
+  # Merge observed and predicted data
+  combined_data <- rbind(observed_data, predicted_data)
+  combined_data$type <- rep(c("Actual Data", "Log-Normal Fit"), each = length(observed_data$x))
+  
+  # Remove non-numeric values from the dataset before applying log()
+  observed_data <- observed_data[!is.na(observed_data$x) & !is.na(observed_data$y),]
+  predicted_data <- predicted_data[!is.na(predicted_data$x) & !is.na(predicted_data$y),]
+  
+  # Plot
+  ggplot(combined_data, aes(x = log(as.numeric(x)), y = log(as.numeric(y)), color = type)) +
+    geom_line() +
+    labs(title = "CCDF with Log-Normal Fitting",
+         x = "log(In Degree)",
+         y = "log(CCDF)",
+         color = "Type") +
+    theme_minimal()+ theme(plot.title = element_text(hjust = 0.5))  # Center the title
+}
+
+
+# Combine plots into a single figure with equal y-axis scale and center titles
+combined_plot <- grid.arrange(degree_distribution_plots(graph1_directed,"in"), degree_distribution_plots2(graph1_directed,"out"), ncol = 1)
+
+# Display the combined plot
+print(combined_plot)
+
+```
+
+
+
+
+```{r degree distribution plots, warning=FALSE}
+degree_distribution_plots(graph1_directed)
+```
+
+
+```{r}
+
+degree_distribution_plots2 <- function(graph){
+  
+  # First plot Log-log Degree Distribution
+  ## Compute the degree of each vertex
+  #degrees <- degree(graph)
+  
+  ## Plot log-log degree distribution
+  plot(degree_distribution(graph), log = "xy", main = "Log-log Degree Distribution", xlab = "Degree", ylab = "Frequency")
+  #----------------------------------------------------------------------------------------------------------------------#
+  
+  # Another Degree Distribution
+  ## Calculate the degrees of all nodes
+  node_degree <- degree(graph, mode = "all")
+  
+  ## Convert degrees to numbers
+  node_degree <- as.numeric(node_degree)
+  
+  ## Find the maximum rank
+  max_degree <- max(node_degree)
+  
+  ## Calculate frequencies for each degree from 0 to max_degree
+  degree_freq <- table(node_degree)
+  all_degrees <- seq(0, max_degree)
+  all_freq <- rep(0, length(all_degrees))
+  all_freq[as.integer(names(degree_freq))] <- degree_freq
+  
+  ## Create a data frame for the degree distribution
+  degree_df <- data.frame(degree = all_degrees, frequency = all_freq)
+  total_freq <- sum(degree_df$frequency)
+  degree_df$percentage <- (degree_df$frequency / total_freq) 
+  
+  ## Plot of the degree distribution 
+  ggplot(degree_df, aes(x = degree, y = percentage)) +
+    geom_bar(stat = "identity", color = 'black', fill = 'blue') +
+    scale_x_continuous(breaks = seq(0, max_degree, by = 10)) +  
+    scale_y_continuous(labels = scales::percent_format()) +  
+    labs(title = "Degree distribution",
+         x = "Degree",
+         y = "frequency") +
+    theme_minimal()
+  
+  #----------------------------------------------------------------------------------------------------------------------# 
+
+# Supponiamo che node_degree sia un vettore che contiene i gradi dei nodi
+# Sostituisci con i tuoi dati reali
+# node_degree <- c(...) 
+
+# Calcolare la CCDF osservata
+ccdf <- 1 - cumsum(table(node_degree) / length(node_degree))
+observed_data <- data.frame(x = as.numeric(names(ccdf)), y = ccdf)
+
+# Funzione per calcolare la CCDF di una distribuzione di potenza con gamma = 2.82
+power_law_ccdf <- function(x, gamma) {
+  x^(-gamma + 1)
+}
+
+# Calcolare la CCDF attesa per la distribuzione di potenza con gamma = 2.82
+gamma <-1.5
+expected_ccdf <- power_law_ccdf(as.numeric(names(ccdf)), gamma)
+predicted_data <- data.frame(x = as.numeric(names(ccdf)), y = expected_ccdf)
+
+# Unire i dati osservati e attesi
+combined_data <- rbind(
+  data.frame(x = observed_data$x, y = observed_data$y, type = "Dati Osservati"),
+  data.frame(x = predicted_data$x, y = predicted_data$y, type = "Power-Law Fit")
+)
+
+# Rimuovere valori non numerici dal dataset prima di applicare log()
+combined_data <- combined_data[!is.na(combined_data$x) & !is.na(combined_data$y) & combined_data$x > 0 & combined_data$y > 0,]
+
+# Plot
+ggplot(combined_data, aes(x = log(x), y = log(y), color = type)) +
+  geom_line() +
+  labs(title = "CCDF con Adattamento Power-Law",
+       x = "log(Degree)",
+       y = "log(CCDF)",
+       color = "Tipo") +
+  theme_minimal()
+
+
+}
+
+```
+
+
+
+
+```{r degree distribution plots, warning=FALSE}
+degree_distribution_plots(graph1_directed)
+```
+
+
+
+## Get the nodes with the highest degrees (hubs) for undirected graphs
+
+```{r funzione get the nodes with the highest degrees (hubs) undirected graph}
+top_nodes_undirected <- function(graph){
+  
+  degrees <- degree(graph)
+  
+  top_nodes <- which(degrees == max(degrees))
+  
+  print(paste("Hubs: ",names(top_nodes),sep=""))
+  print(paste("Degree dell'hubs: ",max(degrees),sep=""))
+}
+```
+
+
+## Get the  top 10 nodes with the highest degrees (hubs) for undirected graphs
+```{r funzione get the top 10 nodes with the highest degrees (hubs) undirected graph}
+top_10_nodes_undirected <- function(graph){
+  # Compute the in-degree of all nodes
+  degrees <- degree(graph)
+  
+  # Sort the nodes based on their in-degree
+  sorted_nodes <- sort(degrees, decreasing = TRUE)
+  
+  # Select the top 100 nodes with the highest in-degree
+  top_hubs <- names(sorted_nodes)[1:10]
+  
+  # Create a data frame with the names and in-degrees of the top 100 hubs
+  top_hubs_table <- data.frame(Node = top_hubs, Degree = sorted_nodes[1:10])
+  
+  # Print the table
+  print(top_hubs_table)
+}
+```
+
+
+
+## Get the nodes with the highest degrees (hubs) for Directed graphs
+
+```{r funzione get the nodes with the highest degrees (hubs) directed graph}
+top_nodes_directed <- function(graph){
+  # Compute the in-degree of all nodes
+  in_degrees <- degree(graph, mode = "in")
+  
+  # Find the maximum in-degree
+  max_in_degree <- max(in_degrees)
+  
+  # Find the node(s) with the maximum in-degree
+  max_in_degree_nodes <- which(in_degrees == max_in_degree)
+  
+  # Print the maximum in-degree and the corresponding node(s)
+  print(paste("Node(s) with maximum in-degree:", names(max_in_degree_nodes)))
+  print(paste("Maximum in-degree:", max_in_degree))
+}
+
+
+```
+
+
+## Get the top 10 nodes with the highest degrees (hubs) for Directed graphs
+```{r funzione get the top 10 nodes with the highest degrees (hubs) directed graph}
+top_10_nodes_directed <- function(graph){
+  # Compute the in-degree of all nodes
+  in_degrees <- degree(graph, mode = "in")
+  
+  # Sort the nodes based on their in-degree
+  sorted_nodes <- sort(in_degrees, decreasing = TRUE)
+  
+  # Select the top 100 nodes with the highest in-degree
+  top_hubs <- names(sorted_nodes)[1:10]
+  
+  # Create a data frame with the names and in-degrees of the top 100 hubs
+  top_hubs_table <- data.frame(Node = top_hubs, InDegree = sorted_nodes[1:10])
+  
+  # Print the table
+  print(top_hubs_table)
+}
+```
+
+
+## Summary of the graph
+
+```{r}
+summary <- function(graph,directed){
+  basic_info(graph)
+  
+  caratteristiche_base_grafo(graph,directed)
+  
+  degree_distribution_plots(graph)
+}
+```
+
+
+
+# Importare i grafi
+
+## Importare i dati
+```{r import new graphs data, warning=FALSE}
+path ="/Users/mattia/Desktop/Università/Magistrale/Secondo anno/Primo semestre/DDMCS/Progetto/Data/"
+
+links <- read.csv(paste(path,"new_links.csv",sep=""),       # Percorso file
+                  colClasses = c("character", "character"), # Definire type della colonna
+                  header = TRUE,                            # Prima riga da i nomi alle colonne del dataframe
+                  col.names = c("user1", "user2"))          # Prendere solo queste due colonne
+
+
+links_directed <- read.csv(paste(path,"new_links_directed.csv",sep="") ,
+                  colClasses = c("character", "character"),
+                  header = TRUE,
+                  col.names = c("from", "to"))
+
+
+nodes <- read.csv(paste(path,"new_nodes.csv",sep=""), 
+                      colClasses = c("character", "character", "character","character"), 
+                      header = TRUE,
+                      col.names = c('id', 'nome', 'famoso','link','Tier'))
+
+
+nodes[nodes$id=="mahna_mannaa",]$Tier = 0
+```
+
+
+
+
+
+## Creazione graph
+```{r create new graphs}
+# Creare il grafo con solo links reciproci
+graph1_undirected <- graph_from_data_frame(d=links, vertices=nodes, directed=F) 
+## Siccome in questo grafo compariranno dei nodes con 0 links rimuoviamoli per maggior ordine.
+degrees <- degree(graph1_undirected)    # Prendere i degree
+#vertices_to_remove <- which(degrees == 0) #
+#graph1_undirected <- delete_vertices(graph1_undirected, vertices_to_remove)
+
+
+graph1_directed   <- graph_from_data_frame(d=links_directed, vertices=nodes, directed=T) 
+```
+
+
+## Visualizzare il graph
+
+```{r interactive plot new graph,eval=FALSE, include=FALSE}
+plot_interactive_network(graph1_undirected)
+```
+
+
+
+```{r interactive plot2 new graph, eval=FALSE, include=FALSE}
+plot_interactive_network(graph1_directed)
+```
+
+
+
+# Lavorare sui grafi
+
+## Caratteristiche base del graph
+
+General information of the graph that will be used to conduct the analysis over the  instagram network.   
+
+```{r basic info of the graph}
+basic_info(graph1_directed)
+```
+
+
+General information over the undirected graph. This graph will be used only to acquire data over the dunbar number and to check errors.  
+
+```{r basic info of the graph undirected}
+basic_info(graph1_undirected)
+```
+
+
+```{r}
+table(nodes$Tier)
+```
+
+
+```{r}
+dim(links_directed)
+```
+
+
+
+## Densità ed average degree
+
+```{r get the degree and the density of the graphs, collapse=TRUE}
+caratteristiche_base_grafo(graph1_directed,directed = T)
+# 3.86657387138239
+# 3.82127625696899
+# 3.79304235206259
+# 3.79217763456495
+# 3.79309416815999
+# 3.75397179553626
+```
+
+
+
+
+Check if the function is really working with directed links.   
+```{r}
+caratteristiche_base_grafo(graph1_directed,directed = F)
+```
+
+i risultati sono diversi, stava effettivamente lavorando con directed links.  
+
+
+```{r}
+avg_path_length <- mean_distance(graph1_directed,directed = T)
+avg_path_length
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Degree distribution
+
+
+
+
+
+```{r}
+degrees <- table(degree(graph1_undirected))
+x <- as.numeric(names(degrees))
+y <- as.numeric(degrees)
+plot(x,y)
+plot(log(x,10),log(y,10),ylim=c(0,4),xlim=c(0,4))
+plot(log(x,10),log(y,10))
+```
+
+
+
+# Dunbar number
+
+
+
+
+```{r}
+# Compute the in-degree of all nodes
+degrees <- degree(graph1_undirected)
+
+# Sort the nodes based on their in-degree
+sorted_nodes <- sort(degrees, decreasing = TRUE)
+
+# Select the top 100 nodes with the highest in-degree
+top_hubs <- names(sorted_nodes)
+
+# Create a data frame with the names and in-degrees of the top 100 hubs
+top_hubs_table <- data.frame(Node = top_hubs, Degree = sorted_nodes)
+
+top_hubs_table
+
+# Print the table
+top_hubs_table[top_hubs_table$Degree > 150,]
+
+# Percentuale utenti al di fuori del dunbar number
+nrow(top_hubs_table[top_hubs_table$Degree > 150,]) / vcount(graph1_undirected) * 100
+```
+
+
+Plot dunbar number.
+```{r}
+p <- ggplot(top_hubs_table, aes(x = Node, y = Degree)) +
+  geom_bar(stat = "identity", fill = "black", color = "black") +
+  geom_hline(yintercept = 150, linetype = "dashed", color = "red", size = 0.4) +
+  scale_y_continuous(breaks = seq(0, max(top_hubs_table$Degree)+50, by = 50)) +
+  labs(#title = "Dunbar number",
+       x = "Users",
+       y = "Interactions") +
+  theme_minimal() + 
+  theme(
+    plot.title = element_text(hjust = 0.5), # Center the title
+    axis.ticks.x = element_blank(),         # Remove x-axis ticks
+    axis.text.x = element_blank()           # Remove x-axis text labels
+  )
+
+# Print the plot
+print(p)
+```
+
+
+# Play with the graph
+
+
+## Remove myself from the graph
+For how the graph is build my node make the graph connected, let's see if we remove it from the graph how does
+it change. 
+
+### graph1_directed
+```{r}
+experimental_graph <- graph1_directed
+basic_info(experimental_graph)
+caratteristiche_base_grafo(experimental_graph,directed=T)
+```
+
+```{r}
+experimental_graph <- delete_vertices(experimental_graph,"mahna_mannaa")
+basic_info(experimental_graph)
+caratteristiche_base_grafo(experimental_graph,directed=T)
+```
+
+Questo è un ottimo risultato, indica che il graph è altamente connesso anche senza il mio nodo che da costruzione faceva da collante tra tutti gli user.
+
+
+
+
+
+
+# Hubs
+
+```{r}
+# Compute the in-degree of all nodes
+in_degrees <- degree(graph1_directed, mode = "in")
+
+# Sort the nodes based on their in-degree
+sorted_nodes <- sort(in_degrees, decreasing = TRUE)
+
+# Select the top 100 nodes with the highest in-degree
+top_hubs <- names(sorted_nodes)[1:10]
+
+# Create a data frame with the names and in-degrees of the top 100 hubs
+top_hubs_table <- data.frame(Node = top_hubs, InDegree = sorted_nodes[1:10])
+
+top_hubs_table
+# Print the table
+```
+
+
+```{r}
+# Compute the in-degree of all nodes
+in_degrees <- degree(graph1_directed, mode = "in")
+
+# Sort the nodes based on their in-degree
+sorted_nodes <- sort(in_degrees, decreasing = TRUE)
+
+# Select the top 100 nodes with the highest in-degree
+top_hubs <- names(sorted_nodes)
+
+# Create a data frame with the names and in-degrees of the top 100 hubs
+top_hubs_table <- data.frame(User = top_hubs, InDegree = sorted_nodes)
+
+
+
+top_hubs_table[1:100,]
+#top_hubs_table[top_hubs_table=="polyccioo",]
+```
+
+
+
+
+
+```{r}
+# Load libraries
+library(knitr)
+library(kableExtra)
+
+```
+
+```{r}
+# Example dataframe
+
+
+# Create and display the table with adjusted column spacing
+kable(top_hubs_table[1:10,]) %>%
+  kable_styling(full_width = FALSE) %>%
+  column_spec(1, width = "3em") %>%
+  column_spec(2, width = "3em") 
+
+
+kable(top_hubs_table[11:20,]) %>%
+  kable_styling(full_width = FALSE) %>%
+  column_spec(1, width = "3em") %>%
+  column_spec(2, width = "3em")
+
+
+kable(top_hubs_table[21:30,]) %>%
+  kable_styling(full_width = FALSE) %>%
+  column_spec(1, width = "3em") %>%
+  column_spec(2, width = "3em")
+```
+
+
+
+```{r}
+quantile(top_hubs_table$InDegree,0.95)
+```
+
+
+
+```{r}
+(sum(top_hubs_table[1:1000,]$InDegree)/ sum(top_hubs_table$InDegree))* 100
+```
+
+
+
+## Get the nodes with the highest degrees (hubs)
+Prendersi le hubs dei grafi.
+
+```{r hubs }
+# graph1_undirected
+top_nodes_undirected(graph1_undirected)
+print("")
+
+# graph1_directed
+top_nodes_undirected(graph1_directed)
+print("")
+```
+
+
+Non ha molto senso guardarsi le hubs in questo modo nei **directed graphs**.  
+Questo perchè potrebbe risultare hub un utente con solo links in uscita e non in entrata, quindi 
+per i directed graph è più corretto distinguere tra IN degree ed OUT degree.  
+
+
+```{r hubs directed graphs}
+top_nodes_directed(graph1_directed)
+```
+
+
+
+### Take the top 10 hubs undirected
+```{r  Take the top 10 hubs undirected}
+top_10_nodes_undirected(graph1_undirected)
+```
+
+
+
+### Take the top 10 hubs directed
+```{r  Take the top 10 hubs directed}
+top_10_nodes_directed(graph1_directed)
+```
+
+
+### Most connected nodes 
+```{r Most connected nodes}
+top_10_nodes_undirected(graph1_directed)
+```
+
+
+
+
+# Path between users
+## Get the shortest path between two users
+
+```{r Get the shortest path of graph1_undirected,collapse=TRUE}
+shortest_path("maribethrusso","valeyellow46",graph1_undirected)
+print("")
+
+```
+
+
+## All the shortest path  Using undirected graph
+```{r all_shortest_paths}
+all_shortest_paths(graph1_undirected, from = "mahna_mannaa", to = "charles_leclerc")$vpaths
+```
+
+
+
+```{r}
+all_shortest_paths(graph1_undirected, from = "vavabell", to = "francescototti")$vpaths
+```
+
+
+```{r}
+avg_path_length <- mean_distance(graph1_directed,directed = T)
+avg_path_length
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Plots
+
+
+
+
+
+## Plots by Tier
+
+### Tier0
+
+
+
+
+
+```{r}
+
+nodes_tier0 <- nodes[nodes$Tier %in% c(0,1),]
+nodes_tier0$Colore = "#33a02c"
+nodes_tier0[nodes_tier0$Tier==1,]$Colore = "#1f78b4"
+
+
+links_directed0 <- links_directed[(links_directed$from =="mahna_mannaa"),]
+graph0   <- graph_from_data_frame(d=links_directed0, vertices=nodes_tier0, directed=T) 
+
+# Assuming 'graph' is your igraph object
+degree <- degree(graph0)
+
+# Convert the graph to a visNetwork compatible format
+graph_vis <- toVisNetworkData(graph0)
+
+# Add node names within the nodes themselves
+graph_vis$nodes$label <- as.character(V(graph0)$nome)
+
+# Set the size of nodes by degree
+max_size <- 100
+min_size <- 10
+node_sizes <- (degree - min(degree)) / (max(degree) - min(degree)) * (max_size - min_size) + min_size
+graph_vis$nodes$size <- node_sizes
+
+# Add directionality to edges
+graph_vis$edges$arrows <- 'to'
+
+
+
+# Ensure V(graph)$Tier is numeric and matches the indices of tier_colors
+graph_vis$nodes$color <- nodes_tier0$Colore
+
+# Plot the interactive graph with visNetwork
+visNetwork(nodes = graph_vis$nodes, edges = graph_vis$edges) %>%
+  visIgraphLayout(type = "full", randomSeed = 123) %>%
+  visNodes() %>%
+  visEdges()
+```
+
+
+
+
+
+
+### Tier1
+
+```{r}
+nodes_tier01 <- nodes[nodes$Tier %in% c(0,1),]
+links_directed01 <- links_directed[(links_directed$from %in% nodes_tier01$id)&(links_directed$to %in% nodes_tier01$id),]
+graph01   <- graph_from_data_frame(d=links_directed01, vertices=nodes_tier01, directed=T) 
+
+
+# COLORI
+nodes_tier01 <- nodes[nodes$Tier %in% c(0,1),]
+nodes_tier01$Colore = "#33a02c"
+nodes_tier01[nodes_tier0$Tier==1,]$Colore = "#1f78b4"
+
+
+
+# Assuming 'graph' is your igraph object
+degree <- degree(graph01)
+
+# Convert the graph to a visNetwork compatible format
+graph_vis <- toVisNetworkData(graph01)
+
+# Add node names within the nodes themselves
+graph_vis$nodes$label <- as.character(V(graph01)$nome)
+
+# Set the size of nodes by degree
+max_size <- 100
+min_size <- 10
+node_sizes <- (degree - min(degree)) / (max(degree) - min(degree)) * (max_size - min_size) + min_size
+graph_vis$nodes$size <- node_sizes
+
+# Add directionality to edges
+graph_vis$edges$arrows <- 'to'
+
+
+
+# Ensure V(graph)$Tier is numeric and matches the indices of tier_colors
+graph_vis$nodes$color <- nodes_tier01$Colore
+
+# Plot the interactive graph with visNetwork
+visNetwork(nodes = graph_vis$nodes, edges = graph_vis$edges) %>%
+  visIgraphLayout(type = "full", randomSeed = 123) %>%
+  visNodes() %>%
+  visEdges()
+```
+
+
+
+
+
+### Tier2
+
+
+```{r eval=FALSE}
+nodes_tier012 <- nodes[nodes$Tier %in% c(0,1,2),]
+links_directed012 <- links_directed[(links_directed$from %in% nodes_tier012$id)&(links_directed$to %in% nodes_tier012$id),]
+graph012   <- graph_from_data_frame(d=links_directed012, vertices=nodes_tier012, directed=T) 
+
+# Assuming 'graph' is your igraph object
+degree <- degree(graph012)
+
+# Convert the graph to a visNetwork compatible format
+graph_vis <- toVisNetworkData(graph012)
+
+# Add node names within the nodes themselves
+graph_vis$nodes$label <- as.character(V(graph012)$nome)
+
+# Set the size of nodes by degree
+max_size <- 100
+min_size <- 10
+node_sizes <- (degree - min(degree)) / (max(degree) - min(degree)) * (max_size - min_size) + min_size
+graph_vis$nodes$size <- node_sizes
+
+# Add directionality to edges
+graph_vis$edges$arrows <- 'to'
+
+# Define colors based on the Tier attribute
+
+nodes_tier012$Colore = "#33a02c"
+nodes_tier012[nodes_tier012$Tier==1,]$Colore = "#1f78b4"
+nodes_tier012[nodes_tier012$Tier==2,]$Colore = "#e31a1c"
+
+
+
+# Ensure V(graph)$Tier is numeric and matches the indices of tier_colors
+graph_vis$nodes$color <- nodes_tier012$Colore
+
+# Plot the interactive graph with visNetwork
+visNetwork(nodes = graph_vis$nodes, edges = graph_vis$edges) %>%
+  visIgraphLayout(type = "full", randomSeed = 123) %>%
+  visNodes() %>%
+  visEdges()
+
+```
+
+
+
+### Better total graph
+```{r}
+# Assuming 'graph1_directed' is your igraph object
+graph <- graph1_directed
+
+# Evaluate the degree of the graph
+degree <- degree(graph)
+
+# Converts the graph to a visNetwork compatible format
+graph_vis <- toVisNetworkData(graph)
+
+# Add node names within the nodes themselves
+graph_vis$nodes$label <- as.character(V(graph)$nome)
+
+# Set the size of nodes by degree
+max_size <- 50
+min_size <- 10
+node_sizes <- (degree - min(degree)) / (max(degree) - min(degree)) * (max_size - min_size) + min_size
+graph_vis$nodes$size <- node_sizes
+
+# Set faded blue color for edges (links)
+edge_color <- "#4286f4"   # Blue color (replace with your preferred shade of blue)
+edge_alpha <- "40"        # Adjust alpha channel (transparency), e.g., "40" for 25% opacity
+
+# Combine color and alpha to create RGBA format
+edge_color_with_alpha <- paste0(edge_color, edge_alpha)
+
+# Apply the color to edges
+graph_vis$edges$color <- edge_color_with_alpha
+
+# Set arrow direction
+graph_vis$edges$arrows <- 'to'
+
+# Plot the interactive graph with visNetwork
+visNetwork(nodes = graph_vis$nodes, edges = graph_vis$edges) %>%
+  visIgraphLayout(type = "full", randomSeed = 123) %>%
+  visNodes()
+```
+
+
+
+
+
+
